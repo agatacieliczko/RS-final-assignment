@@ -1,0 +1,12 @@
+{
+  "num_items": 13441,
+  "max_seq_len": 50,
+  "train_rows": 147267,
+  "test_rows": 15460,
+  "num_train_users": 23284,
+  "num_full_users": 23284,
+  "num_training_examples": 22291,
+  "num_inference_users": 2255,
+  "padding_index": 0,
+  "sequence_padding": "right"
+}
