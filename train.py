@@ -172,16 +172,22 @@ def main():
 
     # ---- Split train / val ----
     dataset = TrainDataset(args.processed_dir / "train_sasrec.npz", num_items)
-    n_val   = max(1, int(len(dataset) * args.val_split))
-    n_train = len(dataset) - n_val
-    train_ds, val_ds = random_split(
-        dataset, [n_train, n_val],
-        generator=torch.Generator().manual_seed(args.seed)
-    )
     nw = min(4, os.cpu_count() or 1)
     pin = torch.cuda.is_available()
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=nw, pin_memory=pin)
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=nw, pin_memory=pin)
+    
+    if args.val_split > 0.0:
+        n_val   = max(1, int(len(dataset) * args.val_split))
+        n_train = len(dataset) - n_val
+        train_ds, val_ds = random_split(
+            dataset, [n_train, n_val],
+            generator=torch.Generator().manual_seed(args.seed)
+        )
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=nw, pin_memory=pin)
+        val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=nw, pin_memory=pin)
+    else:
+        # train on 100% of the data for Kaggle submission
+        train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,  num_workers=nw, pin_memory=pin)
+        val_loader   = None
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=args.lr * 0.01)
@@ -193,28 +199,39 @@ def main():
     for epoch in range(1, args.epochs + 1):
         t0         = time.time()
         train_loss = train_epoch(model, train_loader, optimizer, device)
-        val_loss   = eval_epoch(model, val_loader, device)
         scheduler.step()
 
-        print(
-            f"Epoch {epoch:3d}/{args.epochs}  "
-            f"train={train_loss:.4f}  val={val_loss:.4f}  "
-            f"lr={optimizer.param_groups[0]['lr']:.2e}  "
-            f"time={time.time()-t0:.1f}s"
-        )
-        log_rows.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
+        if val_loader is not None:
+            val_loss = eval_epoch(model, val_loader, device)
+            print(
+                f"Epoch {epoch:3d}/{args.epochs}  "
+                f"train={train_loss:.4f}  val={val_loss:.4f}  "
+                f"lr={optimizer.param_groups[0]['lr']:.2e}  "
+                f"time={time.time()-t0:.1f}s"
+            )
+            log_rows.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
 
-        if val_loss < best_val:
-            best_val = val_loss
-            no_improve = 0
-            torch.save({"epoch": epoch, "model_state_dict": model.state_dict(),
-                        "val_loss": val_loss, "config": config}, best_ckpt)
-            print(f"  ✓ Best checkpoint saved ({val_loss:.4f})")
+            if val_loss < best_val:
+                best_val = val_loss
+                no_improve = 0
+                torch.save({"epoch": epoch, "model_state_dict": model.state_dict(),
+                            "val_loss": val_loss, "config": config}, best_ckpt)
+                print(f"  ✓ Best checkpoint saved ({val_loss:.4f})")
+            else:
+                no_improve += 1
+                if no_improve >= args.patience:
+                    print(f"Early stopping (no improvement for {args.patience} epochs).")
+                    break
         else:
-            no_improve += 1
-            if no_improve >= args.patience:
-                print(f"Early stopping (no improvement for {args.patience} epochs).")
-                break
+            # if no validation set, save the latest model
+            print(
+                f"Epoch {epoch:3d}/{args.epochs}  "
+                f"train={train_loss:.4f}  "
+                f"lr={optimizer.param_groups[0]['lr']:.2e}  "
+                f"time={time.time()-t0:.1f}s"
+            )
+            torch.save({"epoch": epoch, "model_state_dict": model.state_dict(),
+                        "config": config}, best_ckpt)
 
     pd.DataFrame(log_rows).to_csv(args.output_dir / "train_log.csv", index=False)
 
