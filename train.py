@@ -10,23 +10,34 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset, random_split
 
 from SASRec import SASRec, SASRecConfig
 
 
 class TrainDataset(Dataset):
-    def __init__(self, npz_path: Path):
+    def __init__(self, npz_path: Path, num_items: int):
         d = np.load(npz_path)
         self.input_seq    = torch.from_numpy(d["input_seq"].astype(np.int64))
         self.positive_seq = torch.from_numpy(d["positive_seq"].astype(np.int64))
-        self.negative_seq = torch.from_numpy(d["negative_seq"].astype(np.int64))
+        self.num_items    = num_items
 
     def __len__(self):
         return len(self.input_seq)
 
     def __getitem__(self, idx):
-        return self.input_seq[idx], self.positive_seq[idx], self.negative_seq[idx]
+        inp = self.input_seq[idx]
+        pos = self.positive_seq[idx]
+        neg = torch.zeros_like(pos)
+        for i in range(len(pos)):
+            if pos[i] != 0:
+                # Randomly sample a negative item dynamically
+                n = torch.randint(1, self.num_items + 1, (1,)).item()
+                while n == pos[i]:
+                    n = torch.randint(1, self.num_items + 1, (1,)).item()
+                neg[i] = n
+        return inp, pos, neg
 
 
 class InferenceDataset(Dataset):
@@ -35,19 +46,18 @@ class InferenceDataset(Dataset):
         self.ids             = torch.from_numpy(d["ID"].astype(np.int64))
         self.user_ids        = torch.from_numpy(d["user_id"].astype(np.int64))
         self.input_seq       = torch.from_numpy(d["input_seq"].astype(np.int64))
-        self.candidate_items = torch.from_numpy(d["candidate_items"].astype(np.int64))
 
     def __len__(self):
         return len(self.ids)
 
     def __getitem__(self, idx):
-        return self.ids[idx], self.user_ids[idx], self.input_seq[idx], self.candidate_items[idx]
+        return self.ids[idx], self.user_ids[idx], self.input_seq[idx]
 
 
 def train_epoch(model, loader, optimizer, device):
     model.train()
     total, n = 0.0, 0
-    for inp, pos, neg in loader:
+    for inp, pos, neg in tqdm(loader, desc="Train", leave=False):
         inp, pos, neg = inp.to(device), pos.to(device), neg.to(device)
         optimizer.zero_grad()
         loss = model.calculate_loss(inp, pos, neg)
@@ -62,7 +72,7 @@ def train_epoch(model, loader, optimizer, device):
 def eval_epoch(model, loader, device):
     model.eval()
     total, n = 0.0, 0
-    for inp, pos, neg in loader:
+    for inp, pos, neg in tqdm(loader, desc="Val  ", leave=False):
         inp, pos, neg = inp.to(device), pos.to(device), neg.to(device)
         total += model.calculate_loss(inp, pos, neg).item(); n += 1
     return total / max(n, 1)
@@ -73,15 +83,16 @@ def run_inference(model, loader, idx2item, device, out_path):
     model.eval()
     ids, users, ranked_strs = [], [], []
 
-    for batch_ids, batch_users, batch_seq, batch_cands in loader:
+    for batch_ids, batch_users, batch_seq in tqdm(loader, desc="Inference"):
         batch_seq   = batch_seq.to(device)
-        batch_cands = batch_cands.to(device)
-        scores      = model.predict(batch_seq, candidate_items=batch_cands)  # [B, 10]
-        order       = torch.argsort(scores, dim=-1, descending=True)
+
+        # Predict across ALL items in vocabulary
+        scores      = model.predict(batch_seq)  # [B, num_items]
+        topk_indices = torch.topk(scores, 10, dim=-1).indices + 1  # 1-based indexing alignment
 
         for i in range(len(batch_ids)):
-            cands  = batch_cands[i].cpu().tolist()
-            ranked = [idx2item[str(cands[r])] for r in order[i].cpu().tolist()]
+            # Map predictions back to original item IDs
+            ranked = [idx2item[str(idx)] for idx in topk_indices[i].cpu().tolist() if str(idx) in idx2item]
             ids.append(batch_ids[i].item())
             users.append(batch_users[i].item())
             ranked_strs.append(",".join(str(x) for x in ranked))
@@ -123,9 +134,19 @@ def main():
         idx2item = json.load(f)
 
     num_items   = stats["num_items"]
+    num_categories = stats.get("num_categories", 0)
     max_seq_len = stats["max_seq_len"]
 
-    config = SASRecConfig(num_items=num_items, max_seq_len=max_seq_len)
+    # config = SASRecConfig(num_items=num_items, max_seq_len=max_seq_len)
+    item2at_path = args.processed_dir / "item2cat.npy"
+    item2cat = np.load(item2at_path).tolist() if item2at_path.exists() else None
+
+    config = SASRecConfig(
+        num_items=num_items,
+        item2cat=item2cat,
+        max_seq_len=max_seq_len,
+        num_categories=num_categories,
+    )
     model  = SASRec(config).to(device)
     print(f"Params: {sum(p.numel() for p in model.parameters()):,}")
     print(config)
@@ -146,7 +167,7 @@ def main():
         return
 
     # ---- Split train / val ----
-    dataset = TrainDataset(args.processed_dir / "train_sasrec.npz")
+    dataset = TrainDataset(args.processed_dir / "train_sasrec.npz", num_items)
     n_val   = max(1, int(len(dataset) * args.val_split))
     n_train = len(dataset) - n_val
     train_ds, val_ds = random_split(

@@ -4,7 +4,7 @@ import argparse
 import json
 import random
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Dict, List, Sequence, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -129,9 +129,8 @@ def build_training_arrays(
 def build_inference_arrays(
     full_df: pd.DataFrame,
     sample_submission_path: Path,
-    item2idx: Dict[int, int],
     max_seq_len: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     
     sub = pd.read_csv(sample_submission_path)
     if "user_id" not in sub.columns:
@@ -142,21 +141,14 @@ def build_inference_arrays(
 
     histories = build_user_histories(full_df)
     seq_rows: List[np.ndarray] = []
-    candidate_rows: List[np.ndarray] = []
 
     for i, user_id in enumerate(user_values):
         seq_rows.append(right_pad(histories.get(int(user_id), []), max_seq_len))
-
-        # map the 10 candidate item_ids -> contiguous indices
-        raw_candidates = str(sub["item_id"].iloc[i]).split(",")
-        mapped = [item2idx[int(c.strip())] for c in raw_candidates]
-        candidate_rows.append(np.asarray(mapped, dtype=np.int64))
 
     return (
         id_values,
         user_values,
         np.vstack(seq_rows).astype(np.int64),
-        np.vstack(candidate_rows).astype(np.int64),
     )
 
 
@@ -181,9 +173,28 @@ def main() -> None:
     train_df = read_interactions(args.train, "train")
     test_df = read_interactions(args.test, "test")
 
+    # --- Process Metadata ---
+    item2cat_arr = None
+    num_categories = 0
     item_meta_path = args.item_meta if args.item_meta.exists() else None
     item2idx, idx2item = build_item_mapping(train_df, test_df, item_meta_path)
     num_items = len(item2idx)
+
+    if item_meta_path is not None:
+        meta_df = pd.read_csv(item_meta_path)
+        meta_df["main_category"] = meta_df["main_category"].fillna("Unknown")
+
+        unique_cats = sorted(meta_df["main_category"].unique())
+        cat2idx = {cat: i + 1 for i, cat in enumerate(unique_cats)}
+        num_categories = len(cat2idx)
+
+        item_id2cat_idx = dict(zip(meta_df["item_id"], meta_df["main_category"].map(cat2idx)))
+
+        item2cat_arr = np.zeros(num_items + 1, dtype=np.int64)
+        for item_id, item_idx in item2idx.items():
+            item2cat_arr[item_idx] = item_id2cat_idx.get(int(item_id), 0)
+
+        np.save(args.output_dir / "item2cat.npy", item2cat_arr)
 
     train_df = map_items(train_df, item2idx)
     test_df = map_items(test_df, item2idx)
@@ -209,10 +220,9 @@ def main() -> None:
         negative_seq=negative_seq,
     )
 
-    inf_id, inf_user_id, inf_input_seq, inf_candidates = build_inference_arrays(
+    inf_id, inf_user_id, inf_input_seq = build_inference_arrays(
         full_df=full_df,
         sample_submission_path=args.sample_submission,
-        item2idx=item2idx,
         max_seq_len=args.max_seq_len,
     )
     np.savez_compressed(
@@ -220,7 +230,6 @@ def main() -> None:
         ID=inf_id,
         user_id=inf_user_id,
         input_seq=inf_input_seq,
-        candidate_items=inf_candidates,
     )
 
     save_json(args.output_dir / "item2idx.json", {str(k): int(v) for k, v in item2idx.items()})
@@ -228,6 +237,7 @@ def main() -> None:
 
     stats = {
         "num_items": num_items,
+        "num_categories": num_categories,
         "max_seq_len": args.max_seq_len,
         "train_rows": int(len(train_df)),
         "test_rows": int(len(test_df)),

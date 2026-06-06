@@ -1,5 +1,6 @@
 {
   "num_items": 13441,
+  "num_categories": 24,
   "max_seq_len": 50,
   "train_rows": 147267,
   "test_rows": 15460,

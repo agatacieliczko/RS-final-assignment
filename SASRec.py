@@ -10,6 +10,8 @@ import torch.nn.functional as F
 @dataclass
 class SASRecConfig:
     num_items: int
+    num_categories: int = 0
+    item2cat: Optional[list] = None
     max_seq_len: int = 25
     hidden_size: int = 128
     num_blocks: int = 3
@@ -89,6 +91,16 @@ class SASRec(nn.Module):
             embedding_dim=self.hidden_size,
             padding_idx=0,
         )
+
+        self.use_category = config.num_categories > 0 and config.item2cat is not None
+        if self.use_category:
+            self.category_embedding = nn.Embedding(
+                num_embeddings=config.num_categories + 1,
+                embedding_dim=self.hidden_size,
+                padding_idx=0,
+            )
+            self.register_buffer("item2cat", torch.tensor(config.item2cat, dtype=torch.long))
+
         self.position_embedding = nn.Embedding(
             num_embeddings=self.max_seq_len,
             embedding_dim=self.hidden_size,
@@ -122,6 +134,10 @@ class SASRec(nn.Module):
         positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
 
         x = self.item_embedding(input_seq) * math.sqrt(self.hidden_size)
+        if self.use_category:
+            cat_seq = self.item2cat[input_seq]
+            x = x + self.category_embedding(cat_seq) * math.sqrt(self.hidden_size)
+
         x = x + self.position_embedding(positions)
         x = self.embedding_dropout(x)
 
@@ -141,6 +157,13 @@ class SASRec(nn.Module):
         seq_out = self.log2feats(input_seq)
         pos_emb = self.item_embedding(positive_items)
         neg_emb = self.item_embedding(negative_items)
+
+        if self.use_category:
+            pos_cat = self.item2cat[positive_items]
+            neg_cat = self.item2cat[negative_items]
+            pos_emb = pos_emb + self.category_embedding(pos_cat)
+            neg_emb = neg_emb + self.category_embedding(neg_cat)
+
         return seq_out, (seq_out * pos_emb).sum(-1), (seq_out * neg_emb).sum(-1)
 
     def calculate_loss(self, input_seq, positive_items, negative_items) -> torch.Tensor:
@@ -161,6 +184,12 @@ class SASRec(nn.Module):
     def predict(self, input_seq: torch.Tensor, candidate_items: Optional[torch.Tensor] = None) -> torch.Tensor:
         last_hidden = self.get_last_hidden_state(input_seq)
         if candidate_items is None:
-            return torch.matmul(last_hidden, self.item_embedding.weight[1:].t())
+            item_emb = self.item_embedding.weight[1:]
+            if self.use_category:
+                item_emb = item_emb + self.category_embedding(self.item2cat[1:])
+            return torch.matmul(last_hidden, item_emb.t())
+
         candidate_emb = self.item_embedding(candidate_items)
+        if self.use_category:
+            candidate_emb = candidate_emb + self.category_embedding(self.item2cat[candidate_items])
         return (last_hidden.unsqueeze(1) * candidate_emb).sum(-1)
