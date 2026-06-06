@@ -90,7 +90,15 @@ def evaluate(
     for seqs, labels in loader:
         seqs = seqs.to(device)
         # score all items (returns [B, num_items])
-        scores = model.predict(seqs)                          # [B, num_items]
+        scores = model.predict(seqs)
+
+        # mask already seen items
+        for b in range(seqs.size(0)):
+            seen = seqs[b].cpu().numpy()
+            seen_idx = seen[seen > 0] - 1
+            seen_idx = seen_idx[seen_idx < scores.size(1)]
+            scores[b, seen_idx] = -float("inf")
+
         # top-k indices (1-based item ids = column index + 1)
         topk   = torch.topk(scores, k, dim=-1).indices + 1   # [B, k]  1-based
         topk   = topk.cpu().numpy()

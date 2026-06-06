@@ -69,13 +69,33 @@ def train_epoch(model, loader, optimizer, device):
 
 
 @torch.no_grad()
-def eval_epoch(model, loader, device):
+def eval_epoch(model, loader, device, k=10):
     model.eval()
-    total, n = 0.0, 0
+    ndcg_sum, n = 0.0, 0
     for inp, pos, neg in tqdm(loader, desc="Val  ", leave=False):
-        inp, pos, neg = inp.to(device), pos.to(device), neg.to(device)
-        total += model.calculate_loss(inp, pos, neg).item(); n += 1
-    return total / max(n, 1)
+        inp = inp.to(device)
+        scores = model.predict(inp)  # [B, num_items]
+
+        # get the target label (the last non-zero item in the shifted target sequence)
+        pos_np = pos.cpu().numpy()
+        labels = np.array([row[row > 0][-1] if len(row[row > 0]) > 0 else 0 for row in pos_np])
+
+        # mask already seen items
+        inp_np = inp.cpu().numpy()
+        for b in range(inp_np.shape[0]):
+            seen_idx = inp_np[b][inp_np[b] > 0] - 1
+            seen_idx = seen_idx[seen_idx < scores.size(1)]
+            scores[b, seen_idx] = -float("inf")
+
+        topk = torch.topk(scores, k, dim=-1).indices.cpu().numpy() + 1
+
+        for i in range(len(labels)):
+            if labels[i] == 0: continue
+            if labels[i] in topk[i]:
+                rank = np.where(topk[i] == labels[i])[0][0]
+                ndcg_sum += 1.0 / np.log2(rank + 2)
+            n += 1
+    return ndcg_sum / max(n, 1)
 
 
 @torch.no_grad()
@@ -86,8 +106,16 @@ def run_inference(model, loader, idx2item, device, out_path):
     for batch_ids, batch_users, batch_seq in tqdm(loader, desc="Inference"):
         batch_seq   = batch_seq.to(device)
 
-        # Predict across ALL items in vocabulary
-        scores      = model.predict(batch_seq)  # [B, num_items]
+        # predict across ALL items in vocabulary
+        scores = model.predict(batch_seq)  # [B, num_items]
+
+        # mask already seen items so they are not recommended again
+        for b in range(batch_seq.size(0)):
+            seen = batch_seq[b].cpu().numpy()
+            seen_idx = seen[seen > 0] - 1  # 0 is padding, shift to 0-based index
+            seen_idx = seen_idx[seen_idx < scores.size(1)]
+            scores[b, seen_idx] = -float("inf")
+
         topk_indices = torch.topk(scores, 10, dim=-1).indices + 1  # 1-based indexing alignment
 
         for i in range(len(batch_ids)):
@@ -111,6 +139,10 @@ def parse_args():
     p.add_argument("--batch_size",    type=int,   default=256)
     p.add_argument("--lr",            type=float, default=0.00034791588176458877)
     p.add_argument("--weight_decay",  type=float, default=3.030976484602776e-06)
+    p.add_argument("--hidden_size",   type=int,   default=128)
+    p.add_argument("--num_blocks",    type=int,   default=2)
+    p.add_argument("--num_heads",     type=int,   default=2)
+    p.add_argument("--dropout_rate",  type=float, default=0.389)
     p.add_argument("--val_split",     type=float, default=0.05)
     p.add_argument("--patience",      type=int,   default=15)
     p.add_argument("--seed",          type=int,   default=42)
@@ -147,10 +179,10 @@ def main():
         item2cat=item2cat,
         max_seq_len=max_seq_len,
         num_categories=num_categories,
-        hidden_size=128,
-        num_blocks=2,
-        num_heads=2,
-        dropout_rate=0.389035890779561,
+        hidden_size=args.hidden_size,
+        num_blocks=args.num_blocks,
+        num_heads=args.num_heads,
+        dropout_rate=args.dropout_rate,
     )
     model  = SASRec(config).to(device)
     print(f"Params: {sum(p.numel() for p in model.parameters()):,}")
@@ -193,7 +225,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.lr_decay_steps, eta_min=args.lr * 0.01)
 
-    best_val, no_improve = float("inf"), 0
+    best_val, no_improve = -float("inf"), 0
     best_ckpt = args.output_dir / "best_model.pt"
     log_rows  = []
 
@@ -203,21 +235,21 @@ def main():
         scheduler.step()
 
         if val_loader is not None:
-            val_loss = eval_epoch(model, val_loader, device)
+            val_ndcg = eval_epoch(model, val_loader, device)
             print(
                 f"Epoch {epoch:3d}/{args.epochs}  "
-                f"train={train_loss:.4f}  val={val_loss:.4f}  "
+                f"train={train_loss:.4f}  val_ndcg@{10}={val_ndcg:.4f}  "
                 f"lr={optimizer.param_groups[0]['lr']:.2e}  "
                 f"time={time.time()-t0:.1f}s"
             )
-            log_rows.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
+            log_rows.append({"epoch": epoch, "train_loss": train_loss, "val_ndcg": val_ndcg})
 
-            if val_loss < best_val:
-                best_val = val_loss
+            if val_ndcg > best_val:
+                best_val = val_ndcg
                 no_improve = 0
                 torch.save({"epoch": epoch, "model_state_dict": model.state_dict(),
-                            "val_loss": val_loss, "config": config}, best_ckpt)
-                print(f"  ✓ Best checkpoint saved ({val_loss:.4f})")
+                            "val_ndcg": val_ndcg, "config": config}, best_ckpt)
+                print(f"  ✓ Best checkpoint saved ({val_ndcg:.4f})")
             else:
                 no_improve += 1
                 if no_improve >= args.patience:

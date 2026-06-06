@@ -36,7 +36,6 @@ def objective(trial, train_loader, val_loader, num_items, num_categories, max_se
     lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
     weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
 
-    # 2. Build Model
     config = SASRecConfig(
         num_items=num_items,
         num_categories=num_categories,
@@ -50,6 +49,8 @@ def objective(trial, train_loader, val_loader, num_items, num_categories, max_se
     model = SASRec(config).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
+    best_ndcg = -float('inf')
+
     # train and eval
     for epoch in range(epochs):
         model.train()
@@ -62,14 +63,18 @@ def objective(trial, train_loader, val_loader, num_items, num_categories, max_se
             optimizer.step()
 
         # evaluate
-        val_loss = eval_epoch(model, val_loader, device)
-        trial.report(val_loss, epoch)
+        val_ndcg = eval_epoch(model, val_loader, device)
+        trial.report(val_ndcg, epoch)
+
+        if val_ndcg > best_ndcg:
+            best_ndcg = val_ndcg
+
 
         # prune based on the historical performance of other trials
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
 
-    return val_loss
+    return best_ndcg
 
 
 def main():
@@ -101,14 +106,14 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=nw, pin_memory=pin)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=nw, pin_memory=pin)
 
-    study = optuna.create_study(direction="minimize", pruner=optuna.pruners.MedianPruner())
+    study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner())
     
     study.optimize(lambda trial: objective(
         trial, train_loader, val_loader, num_items, num_categories, max_seq_len, item2cat, device, args.epochs
     ), n_trials=args.trials)
 
     print("\nBest trial:")
-    print(f"  Value (Val Loss): {study.best_trial.value}")
+    print(f"  Value (Val NDCG): {study.best_trial.value}")
     print(f"  Params: {study.best_trial.params}")
 
 if __name__ == "__main__":
