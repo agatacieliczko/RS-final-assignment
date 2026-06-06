@@ -107,6 +107,7 @@ def parse_args():
     p.add_argument("--processed_dir", type=Path, default=Path("processed"))
     p.add_argument("--output_dir",    type=Path, default=Path("runs/exp"))
     p.add_argument("--epochs",        type=int,   default=100)
+    p.add_argument("--lr_decay_steps",type=int,   default=100)
     p.add_argument("--batch_size",    type=int,   default=256)
     p.add_argument("--lr",            type=float, default=0.00034791588176458877)
     p.add_argument("--weight_decay",  type=float, default=3.030976484602776e-06)
@@ -190,7 +191,7 @@ def main():
         val_loader   = None
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=args.lr * 0.01)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.lr_decay_steps, eta_min=args.lr * 0.01)
 
     best_val, no_improve = float("inf"), 0
     best_ckpt = args.output_dir / "best_model.pt"
