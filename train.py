@@ -108,8 +108,8 @@ def parse_args():
     p.add_argument("--output_dir",    type=Path, default=Path("runs/exp"))
     p.add_argument("--epochs",        type=int,   default=100)
     p.add_argument("--batch_size",    type=int,   default=256)
-    p.add_argument("--lr",            type=float, default=5e-4)
-    p.add_argument("--weight_decay",  type=float, default=1e-4)
+    p.add_argument("--lr",            type=float, default=0.00034791588176458877)
+    p.add_argument("--weight_decay",  type=float, default=3.030976484602776e-06)
     p.add_argument("--val_split",     type=float, default=0.05)
     p.add_argument("--patience",      type=int,   default=15)
     p.add_argument("--seed",          type=int,   default=42)
@@ -146,6 +146,10 @@ def main():
         item2cat=item2cat,
         max_seq_len=max_seq_len,
         num_categories=num_categories,
+        hidden_size=128,
+        num_blocks=2,
+        num_heads=2,
+        dropout_rate=0.389035890779561,
     )
     model  = SASRec(config).to(device)
     print(f"Params: {sum(p.numel() for p in model.parameters()):,}")
