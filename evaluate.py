@@ -130,18 +130,14 @@ def main():
     num_items = stats["num_items"]
     max_seq_len = stats["max_seq_len"]
 
-    config = SASRecConfig(
-        num_items=num_items,
-        max_seq_len=max_seq_len
-    )
-
-    model = SASRec(config).to(device)
-
     ckpt = torch.load(
         CHECKPOINT,
         map_location=device,
         weights_only=False
     )
+
+    config = ckpt.get("config", SASRecConfig(num_items=num_items, max_seq_len=max_seq_len))
+    model = SASRec(config).to(device)
 
     model.load_state_dict(ckpt["model_state_dict"])
 
