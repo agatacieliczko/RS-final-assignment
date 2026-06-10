@@ -17,7 +17,7 @@ CHECKPOINT = Path("runs/exp/best_model.pt")
 OUT_PATH = Path("runs/exp/submission_ensemble_svd.csv")
 
 SVD_COMPONENTS = 128
-ALPHA = 0.7   # 0.8 = mostly SASRec, 0.2 = SVD
+ALPHA = 0.6   # 0.8 = mostly SASRec, 0.2 = SVD
 BATCH_SIZE = 512
 
 
