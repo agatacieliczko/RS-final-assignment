@@ -15,7 +15,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 PROCESSED_DIR = Path("/kaggle/working/RS-final-assignment/processed")
 DATA_DIR = Path("/kaggle/working/RS-final-assignment/data")
-CHECKPOINT = Path("/kaggle/working/runs/exp/best_model.pt")OUT_PATH = Path("runs/exp/submission_ensemble_svd.csv")
+CHECKPOINT = Path("/kaggle/working/runs/exp/best_model.pt")
+OUT_PATH = Path("runs/exp/submission_ensemble_svd.csv")
 
 SVD_COMPONENTS = 128
 ALPHA = 0.6   # 0.8 = mostly SASRec, 0.2 = SVD
