@@ -80,7 +80,7 @@ def main():
             item2cat=item2cat,
         ),
     )
-
+    print("Model max_seq_len:", config.max_seq_len) 
     model = SASRec(config).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
