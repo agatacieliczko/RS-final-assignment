@@ -10,6 +10,8 @@ from torch.utils.data import DataLoader
 from SASRec import SASRec, SASRecConfig
 from train import InferenceDataset
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 PROCESSED_DIR = Path("processed")
 DATA_DIR = Path("data")
