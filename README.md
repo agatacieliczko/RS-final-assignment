@@ -67,7 +67,7 @@ python ensemble_svd.py
 
 This generates:
 
-runs/exp/submission_ensemble_svd.csv
+runs/exp/submission.csv
 
 ## Reproducibility
 
