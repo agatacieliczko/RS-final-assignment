@@ -59,7 +59,7 @@ def right_pad(seq: Sequence[int], max_seq_len: int) -> np.ndarray:
     """Truncate to the most recent max_seq_len values, then left-pad with 0."""
     seq = list(seq)[-max_seq_len:]
     arr = np.zeros(max_seq_len, dtype=np.int64)
-    arr[-len(seq):] = seq
+    arr[: len(seq)] = seq
     return arr
 
 
